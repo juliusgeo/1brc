@@ -1,23 +1,7 @@
 import math
 import mmap
 import os
-from collections import defaultdict
-from dataclasses import dataclass
-from math import ceil
-
-
-@dataclass
-class Station:
-    min: float
-    max: float
-    count: int
-    total: float
-
-
-
-
-from multiprocessing import Process, Queue, cpu_count
-from multiprocessing.pool import Pool
+from multiprocessing import cpu_count
 
 def chunk_file(filename):
     file_size = os.path.getsize(filename)
@@ -31,34 +15,30 @@ def chunk_file(filename):
             cur_pos = f.tell()
             chunks.append((prev, cur_pos))
             prev = cur_pos
-        print(chunks)
     return chunks
-
-
-def update_station(station, value):
-    if not station:
-        return [value, value, 1, value]
-    else:
-        if value < station[0]:
-            station[0] = value
-        if value > station[1]:
-            station[1] = value
-        station[2] += 1
-        station[3] += value
-        return station
 
 def worker(start, end, filename):
     stations={}
-    with open(filename, "r+b") as f:
-        closest_start = (start//mmap.ALLOCATIONGRANULARITY)*mmap.ALLOCATIONGRANULARITY
-        remainder = start-closest_start
-        chunk = mmap.mmap(fileno=f.fileno(),length=end-closest_start, offset=closest_start, access=mmap.ACCESS_READ)
-        chunk.madvise(mmap.MADV_SEQUENTIAL)
-        chunk.seek(remainder)
-        for row in iter(chunk.readline, b''):
-            name, value = row.split(b';')
-            name,value = name, float(value)
-            stations[name] = update_station(stations.get(name), value)
+    f = os.open(filename, flags=os.O_RDONLY)
+    closest_start = (start//mmap.ALLOCATIONGRANULARITY)*mmap.ALLOCATIONGRANULARITY
+    remainder = start-closest_start
+    chunk = mmap.mmap(fileno=f,length=end-closest_start, offset=closest_start, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)
+    chunk.madvise(mmap.MADV_SEQUENTIAL)
+    chunk.madvise(mmap.MADV_DONTNEED, 0, remainder)
+    chunk.seek(remainder)
+    for row in iter(chunk.readline, b''):
+        name, value = row.split(b';')
+        value = float(value)
+        if name not in stations:
+            stations[name] = [value,value,0,0]
+        station=stations[name]
+        if value<station[0]:
+            station[0]=value
+        if value>station[1]:
+            station[1]=value
+        station[2]+=1
+        station[3]+=value
+
     return stations
 
 def merge_stations(station, value):
@@ -71,11 +51,12 @@ def merge_stations(station, value):
     return station
 def main(filename):
     chunks=chunk_file(filename)
-    with Pool() as pool:
-        workers=[pool.apply_async(worker,args=(*chunk,filename)) for chunk in chunks]
+    import concurrent.futures as cf
+    with cf.ProcessPoolExecutor() as pool:
+        workers=[pool.submit(worker, *chunk, filename) for chunk in chunks]
         stations={}
-        for d in [w.get() for w in workers]:
-            for key,value in d.items():
+        for d in cf.as_completed(workers):
+            for key,value in d.result().items():
                 if key in stations:
                     stations[key]=merge_stations(stations[key],value)
                 else:
