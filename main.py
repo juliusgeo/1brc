@@ -17,6 +17,7 @@ def chunk_file(filename):
             prev = cur_pos
     return chunks
 
+from brc import update_dict
 def worker(start, end, filename):
     stations={}
     f = os.open(filename, flags=os.O_RDONLY)
@@ -26,19 +27,7 @@ def worker(start, end, filename):
     chunk.madvise(mmap.MADV_SEQUENTIAL)
     chunk.madvise(mmap.MADV_DONTNEED, 0, remainder)
     chunk.seek(remainder)
-    for row in iter(chunk.readline, b''):
-        name, value = row.split(b';')
-        value = float(value)
-        if name not in stations:
-            stations[name] = [value,value,0,0]
-        station=stations[name]
-        if value<station[0]:
-            station[0]=value
-        if value>station[1]:
-            station[1]=value
-        station[2]+=1
-        station[3]+=value
-
+    update_dict(stations, iter(chunk.readline, b''))
     return stations
 
 def merge_stations(station, value):
