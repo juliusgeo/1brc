@@ -18,17 +18,7 @@ def chunk_file(filename):
     return chunks
 
 from brc import update_dict
-def worker(start, end, filename):
-    stations={}
-    f = os.open(filename, flags=os.O_RDONLY)
-    closest_start = (start//mmap.ALLOCATIONGRANULARITY)*mmap.ALLOCATIONGRANULARITY
-    remainder = start-closest_start
-    chunk = mmap.mmap(fileno=f,length=end-closest_start, offset=closest_start, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)
-    chunk.madvise(mmap.MADV_SEQUENTIAL)
-    chunk.madvise(mmap.MADV_DONTNEED, 0, remainder)
-    chunk.seek(remainder)
-    update_dict(stations, iter(chunk.readline, b''))
-    return stations
+
 
 def merge_stations(station, value):
     if value[0]<station[0]:
@@ -38,24 +28,30 @@ def merge_stations(station, value):
     station[2]+=value[2]
     station[3]+=value[3]
     return station
+
+def merge_and_format(worker_results):
+    stations = {}
+    for d in worker_results:
+        for key,value in d.result().items():
+            if key in stations:
+                stations[key]=merge_stations(stations[key],value)
+            else:
+                stations[key]=value
+
+    def round(x):
+        return (math.ceil(x*10)/10)
+
+    for station in stations:
+        minimum,maximum,count,total=stations[station]
+        stations[station]=f"{minimum:.1f}/{round(total/count):.1f}/{maximum:.1f}"
+    return stations
 def main(filename):
     chunks=chunk_file(filename)
     import concurrent.futures as cf
     with cf.ProcessPoolExecutor() as pool:
-        workers=[pool.submit(worker, *chunk, filename) for chunk in chunks]
-        stations={}
-        for d in cf.as_completed(workers):
-            for key,value in d.result().items():
-                if key in stations:
-                    stations[key]=merge_stations(stations[key],value)
-                else:
-                    stations[key]=value
-        def round(x):
-            return (math.ceil(x * 10) / 10)
-        for station in stations:
-            minimum,maximum,count,total=stations[station]
-            stations[station]=f"{minimum:.1f}/{round(total/count):.1f}/{maximum:.1f}"
-        return "{"+', '.join([key.decode("utf-8")+"="+stations[key] for key in sorted(stations.keys())])+"}"
+        workers=[pool.submit(update_dict, *chunk, filename) for chunk in chunks]
+        stations=merge_and_format(cf.as_completed(workers))
+        return "{"+', '.join([key+"="+stations[key] for key in sorted(stations.keys())])+"}"
 
 
 if __name__ == '__main__':

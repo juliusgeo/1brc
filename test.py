@@ -7,5 +7,4 @@ if __name__=="__main__":
         measurements_output = measurements_file+".out"
         output = main(measurements_input)
         expected_output = open(measurements_output).read().strip()
-
         assert output == expected_output, f"\n{output}\n{expected_output}"
